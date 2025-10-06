@@ -1,0 +1,9 @@
+# install torch with the CUDA index-url (not from this file), then:
+transformers>=4.44
+datasets>=2.19
+accelerate>=0.33
+evaluate>=0.4
+scikit-learn
+matplotlib
+tqdm
+bitsandbytes>=0.43
