@@ -1,10 +1,15 @@
+"""
+Notes:
+- GPT-2 has no pad token; we set pad_token = eos_token.
+"""
+
 import os, json, argparse, math
 
 from transformers import GPT2ForSequenceClassification, Trainer, TrainingArguments, set_seed
 
-from data_utils import build_tokenizer, build_datasets, LABEL_NAMES
-from metrics_utils import compute_metrics, save_confusion_matrix, classification_text_report
-from efficiency_utils import (
+from utils.data_utils import build_tokenizer, build_datasets, LABEL_NAMES
+from utils.metrics_utils import compute_metrics, save_confusion_matrix, classification_text_report
+from utils.efficiency_utils import (
     get_device, folder_size_bytes, pretty_size, measure_latency
 )
 

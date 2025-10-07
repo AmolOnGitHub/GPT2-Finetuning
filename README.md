@@ -38,10 +38,7 @@ pip install --index-url https://download.pytorch.org/whl/cu118 "torch>=2.3" torc
 ```
 
 ```bash
-pip install "transformers>=4.44" "datasets>=2.19" "accelerate>=0.33" \
-            "evaluate>=0.4" scikit-learn matplotlib tqdm
-
-pip install "bitsandbytes>=0.43"
+pip install "transformers>=4.44" "datasets>=2.19" "accelerate>=0.33" "evaluate>=0.4" scikit-learn matplotlib tqdm torch torchvision "bitsandbytes>=0.43"
 
 python - <<'PY'
 import torch, bitsandbytes as bnb
