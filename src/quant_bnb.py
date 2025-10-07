@@ -19,7 +19,7 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
-import bitsandbytes as bnb 
+import bitsandbytes as bnb   # type: ignore
 
 from utils.data_utils import build_tokenizer, build_datasets, LABEL_NAMES
 from utils.metrics_utils import compute_metrics, save_confusion_matrix, classification_text_report
@@ -170,7 +170,7 @@ def main():
         peak_mem = None
         try:
             torch.cuda.reset_peak_memory_stats()
-            _ = model(**{k: v.to(device) for k, v in collator([test_ds[0]]).items()})
+            _ = model(**{k: v.to(device) for k, v in collator([test_ds[0]]).items()})   # type: ignore
             peak_mem = torch.cuda.max_memory_allocated()
         except Exception:
             pass

@@ -195,7 +195,7 @@ def main():
 
     int8_model_path = os.path.join(quant_model_dir, 'model_int8.safetensors')
     save_file(int8_state_dict, int8_model_path)
-    print(f"✅ Saved true INT8 tensors to: {int8_model_path}")
+    print(f"Saved true INT8 tensors to: {int8_model_path}")
     
     # Evaluate quantized model
     q_val = trainer.evaluate()
