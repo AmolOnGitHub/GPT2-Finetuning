@@ -20,6 +20,7 @@ from transformers import (
     set_seed,
 )
 import bitsandbytes as bnb 
+
 from utils.data_utils import build_tokenizer, build_datasets, LABEL_NAMES
 from utils.metrics_utils import compute_metrics, save_confusion_matrix, classification_text_report
 from utils.efficiency_utils import get_device, measure_latency, pretty_size
@@ -104,90 +105,112 @@ def main():
     args = parser.parse_args()
 
     set_seed(42)
-
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Datasets
+    # === Prepare datasets ===
     tokenizer_ref = build_tokenizer(args.model_name)
     subsets = {'train': 0, 'val': args.subset_val, 'test': args.subset_test}
-    _, val_ds, test_ds, collator = build_datasets(tokenizer_ref, args.max_length, val_size=2000, subsets=subsets)
-
-
-    # Run for each quantization mode
+    _, val_ds, test_ds, collator = build_datasets(
+        tokenizer_ref, args.max_length, val_size=2000, subsets=subsets
+    )
 
     results: Dict[str, Any] = {}
 
     for mode in ['int8', 'nf4']:
         print(f"\n=== Loading bitsandbytes model: {mode} ===")
         model, tok = load_bnb_model(args.baseline_dir, mode)
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
 
-        # Trainer for eval only
-        targs = TrainingArguments(
-            output_dir=os.path.join(args.output_dir, f'gpt2-{mode}'),
-            per_device_eval_batch_size=args.eval_batch_size,
-            report_to='none',
-        )
-        trainer = Trainer(
-            model=model,
-            args=targs,
-            eval_dataset=val_ds,
-            tokenizer=tok,
-            data_collator=collator,
-            compute_metrics=compute_metrics,
-        )
+        # bitsandbytes models are already on their proper device (device_map='auto')
+        try:
+            # Most quantized models have their first parameter already placed correctly
+            device = next(model.parameters()).device
+        except Exception:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Eval
-        val_metrics = trainer.evaluate()
-        test_out = trainer.predict(test_ds)
-        logits, labels = test_out.predictions, test_out.label_ids
-        preds = logits.argmax(axis=-1)
-        test_metrics = compute_metrics((logits, labels))
+        # --- helper for batched inference ---
+        def run_inference(dataset):
+            all_logits, all_labels = [], []
+            for i in range(0, len(dataset), args.eval_batch_size):
+                batch = dataset[i:i + args.eval_batch_size]
+                batch = collator(batch)
+                batch = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
+                with torch.no_grad():
+                    outputs = model(**batch)
+                    logits = outputs.logits.detach().cpu()
+                all_logits.append(logits)
+                all_labels.append(batch["labels"].cpu())
+            return torch.cat(all_logits), torch.cat(all_labels)
 
-        # Confusion matrix & report
+        # === Evaluate on val + test ===
+        print("Running evaluation ...")
+        val_logits, val_labels = run_inference(val_ds)
+        test_logits, test_labels = run_inference(test_ds)
+        val_preds = val_logits.argmax(dim=-1)
+        test_preds = test_logits.argmax(dim=-1)
+
+        val_metrics = compute_metrics((val_logits.numpy(), val_labels.numpy()))
+        test_metrics = compute_metrics((test_logits.numpy(), test_labels.numpy()))
+
+        # === Confusion matrix & report ===
         cm_path = os.path.join('reports/figs', f'confusion_matrix_bnb_{mode}.png')
-        save_confusion_matrix(labels, preds, LABEL_NAMES, cm_path, title=f'bitsandbytes {mode.upper()} — GPT-2 on AG News')
-        classification_text_report(labels, preds, LABEL_NAMES, os.path.join(args.output_dir, f'classification_report_{mode}.txt'))
+        save_confusion_matrix(
+            test_labels.numpy(), test_preds.numpy(), LABEL_NAMES,
+            cm_path, title=f'bitsandbytes {mode.upper()} — GPT-2 on AG News'
+        )
+        classification_text_report(
+            test_labels.numpy(), test_preds.numpy(), LABEL_NAMES,
+            os.path.join(args.output_dir, f'classification_report_{mode}.txt')
+        )
 
-        # Memory footprint
+        # === Efficiency ===
         param_bytes = approx_param_bytes(model)
         peak_mem = None
         try:
             torch.cuda.reset_peak_memory_stats()
-            # quick forward to get peak
-            model.eval()
-            _ = trainer.predict(test_ds.select(range(min(64, len(test_ds)))))
-            peak_mem = torch.cuda.max_memory_allocated()  # bytes
+            _ = model(**{k: v.to(device) for k, v in collator([test_ds[0]]).items()})
+            peak_mem = torch.cuda.max_memory_allocated()
         except Exception:
             pass
 
-        # Latency
-        avg_ms = measure_latency(model, test_ds, collator, device='cuda', batch_size=1, warmup_steps=20, measure_steps=100)
+        avg_ms = measure_latency(
+            model, test_ds, collator,
+            device='cuda', batch_size=1,
+            warmup_steps=20, measure_steps=100
+        )
 
-        # Save minimal checkpoint (config + quantized weights references)
-        save_dir = os.path.join(args.output_dir, f'gpt2-{mode}')
+        # === Save quantized model ===
+        save_dir = os.path.join(args.output_dir, f"gpt2-{mode}")
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         try:
             model.save_pretrained(save_dir, safe_serialization=True)
             tok.save_pretrained(save_dir)
         except Exception as e:
-            warnings.warn(f"Could not save {mode} model with save_pretrained: {e}")
+            warnings.warn(f"Could not save {mode} model: {e}")
 
-        # Collect
+        # === Store results ===
         results[mode] = {
-            'val_metrics': {k: float(v) for k, v in val_metrics.items() if isinstance(v, (int, float, np.floating))},
-            'test_metrics': {k: float(v) for k, v in test_metrics.items()},
-            'params_approx_bytes': int(param_bytes),
-            'params_approx_pretty': pretty_size(int(param_bytes)),
-            'peak_cuda_allocated_bytes': int(peak_mem) if peak_mem is not None else None,
-            'peak_cuda_allocated_pretty': pretty_size(int(peak_mem)) if peak_mem is not None else None,
-            'latency_ms_per_sample_b1': float(avg_ms) if not math.isnan(avg_ms) else None,
-            'confusion_matrix_png': cm_path,
-            'save_dir': save_dir,
+            "val_metrics": {k: float(v) for k, v in val_metrics.items()
+                            if isinstance(v, (int, float, np.floating))},
+            "test_metrics": {k: float(v) for k, v in test_metrics.items()},
+            "params_approx_bytes": int(param_bytes),
+            "params_approx_pretty": pretty_size(int(param_bytes)),
+            "peak_cuda_allocated_bytes": int(peak_mem) if peak_mem else None,
+            "peak_cuda_allocated_pretty": pretty_size(int(peak_mem)) if peak_mem else None,
+            "latency_ms_per_sample_b1": float(avg_ms) if not math.isnan(avg_ms) else None,
+            "confusion_matrix_png": cm_path,
+            "save_dir": save_dir,
         }
 
-        print(f"Finished {mode}: accuracy={results[mode]['test_metrics']['accuracy']:.4f}, size≈{results[mode]['params_approx_pretty']}")
+        print(
+            f"Finished {mode}: "
+            f"accuracy={results[mode]['test_metrics']['accuracy']:.4f}, "
+            f"size≈{results[mode]['params_approx_pretty']}"
+        )
 
-    # Write combined results
+    # === Write combined results ===
     out_json = os.path.join(args.output_dir, 'metrics_quant_bnb.json')
     with open(out_json, 'w') as f:
         json.dump(results, f, indent=2)
