@@ -1,61 +1,98 @@
-### Links
+# Finetuning GPT2 and Quantization Analysis
 
-- Report 1:
-- Report 2:
+Fine-tuned GPT2 on AG News and applied post-training quantization to analyze accuracy-efficiency trade-offs.
 
-## Setup
-
-### MPS
+## Setup & Running
 
 ```bash
-conda create --name ANLP_A2 python=3.12
-conda activate ANLP_A2
-
-pip install "torch>=2.3" "transformers>=4.44" "datasets>=2.19" \
-            "accelerate>=0.33" "evaluate>=0.4" scikit-learn \
-            matplotlib tqdm
-
-python - <<'PY'
-import torch
-print("torch:", torch.__version__)
-print("MPS available:", torch.backends.mps.is_available())
-print("CUDA available:", torch.cuda.is_available())
+pip install -r requirements.txt
 ```
 
-### CUDA
+### Running Fine-Tuning
 
 ```bash
-conda create --name ANLP_A2 python=3.12
-conda activate ANLP_A2
+./run.sh baseline
 ```
-install PyTorch matching your CUDA (pick one of the two lines)
+
+This creates the following in `./outputs`:
+
+```
+baseline-gpt2-full
+├── checkpoint-14750/
+├── checkpoint-29500/
+├── checkpoint-44250/
+├── classification_report.txt
+├── config.json
+├── merges.txt
+├── metrics_baseline.json
+├── model.safetensors
+├── special_tokens_map.json
+├── tokenizer_config.json
+├── tokenizer.json
+├── training_args.bin
+└── vocab.json
+```
+
+### Running Quantization from Scratch
 
 ```bash
-# CUDA 12.1:
-pip install --index-url https://download.pytorch.org/whl/cu121 "torch>=2.3" torchvision torchaudio
-# CUDA 11.8:
-pip install --index-url https://download.pytorch.org/whl/cu118 "torch>=2.3" torchvision torchaudio
+./run.sh ptq
 ```
+
+This creates the following in `./outputs`:
+
+```
+ptq-scratch-int8
+├── classification_report_ptq.txt
+├── metrics_ptq_scratch.json
+├── ptq_scratch_summary.json
+└── quantized_model
+    ├── config.json
+    ├── merges.txt
+    ├── model_int8.safetensors
+    ├── model.safetensors
+    ├── special_tokens_map.json
+    ├── tokenizer_config.json
+    ├── tokenizer.json
+    └── vocab.json
+```
+
+### Running BNB Quantization
 
 ```bash
-pip install "transformers>=4.44" "datasets>=2.19" "accelerate>=0.33" "evaluate>=0.4" scikit-learn matplotlib tqdm torch torchvision "bitsandbytes>=0.43"
-
-python - <<'PY'
-import torch, bitsandbytes as bnb
-print("torch:", torch.__version__)
-print("CUDA:", torch.version.cuda, "| available:", torch.cuda.is_available())
-print("GPUs:", torch.cuda.device_count())
-print("bnb:", bnb.__version__)
+./run.sh bnb
 ```
 
-## Run
+This creates the following in `./outputs`:
 
-```bash
-python src/train_baseline.py \
-  --device auto \
-  --epochs 3 \
-  --max_length 256 \
-  --train_batch_size 8 \
-  --eval_batch_size 32 \
-  --output_dir outputs/baseline-gpt2-full
 ```
+bnb-quantized
+├── classification_report_int8.txt
+├── classification_report_nf4.txt
+├── gpt2-int8
+│   ├── config.json
+│   ├── merges.txt
+│   ├── model.safetensors
+│   ├── special_tokens_map.json
+│   ├── tokenizer_config.json
+│   ├── tokenizer.json
+│   └── vocab.json
+├── gpt2-nf4
+│   ├── config.json
+│   ├── merges.txt
+│   ├── model.safetensors
+│   ├── special_tokens_map.json
+│   ├── tokenizer_config.json
+│   ├── tokenizer.json
+│   └── vocab.json
+└── metrics_quant_bnb.json
+```
+
+## Pre-trained Models
+
+Here are links to the pretrained models:
+
+- [Baseline](https://iiithydstudents-my.sharepoint.com/:f:/g/personal/amol_vijayachandran_students_iiit_ac_in/EoUaS1efyb1BlXSUaIKi8vsBWm1v7bl_rtFnKvdjR7KauQ?e=fdmPBt)
+- [INT8-Scratch](https://iiithydstudents-my.sharepoint.com/:f:/g/personal/amol_vijayachandran_students_iiit_ac_in/ErXRWdnOVzJApXPzRq8AvKEBKhNtlhgvLfCwNK-1Ae3Ueg?e=1JJTen)
+- [INT8-bitsandbytes](https://iiithydstudents-my.sharepoint.com/:f:/g/personal/amol_vijayachandran_students_iiit_ac_in/Ev4vk2t5F6FPjf-tjsBV6U0BEwQsP7ryn1QEA65R2zBi8Q?e=552HMt)
+- [NF4-bitsandbytes](https://iiithydstudents-my.sharepoint.com/:f:/g/personal/amol_vijayachandran_students_iiit_ac_in/EgApx_9_Yo5DoSR1LDDLjIUBmP4uAdcs3Hq1poCWWVAswg?e=ah2RiF)
